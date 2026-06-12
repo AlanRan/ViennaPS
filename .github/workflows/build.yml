@@ -1,13 +1,10 @@
-name: 🧪 Run Tests
+name: Build ViennaPS wheel (Windows)
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build.yml'
 
 jobs:
   test:
