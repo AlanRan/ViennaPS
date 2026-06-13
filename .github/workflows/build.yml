@@ -19,16 +19,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install vtk pybind11 scikit-build-core cmake ninja delvewheel
 
-      - name: Locate VTK CMake directory
-        run: |
-          $vtk_dir = python -c "import vtk, os; p=os.path.join(os.path.dirname(vtk.__file__), 'lib', 'cmake'); dirs=[d for d in os.listdir(p) if d.startswith('vtk-')]; print(os.path.join(p, dirs[0]))"
-          echo "VTK_DIR=$vtk_dir" >> $env:GITHUB_ENV
-
       - name: Build wheel
         run: pip wheel . --wheel-dir=dist --no-build-isolation
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
-          VTK_DIR: ${{ env.VTK_DIR }}
+          CMAKE_PREFIX_PATH: ${{ env.pythonLocation }}   # 自动找到 VTK CMake 配置
 
       - name: Repair wheel (bundle all DLLs)
         run: delvewheel repair dist\*.whl -w dist_fixed
