@@ -1,7 +1,6 @@
-name: Build ViennaPS wheel (Python 3.10, windows-2022)
+name: Build ViennaPS wheel (Python 3.10)
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
@@ -15,31 +14,21 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install build prerequisites
+      - name: Install build prerequisites and VTK
         run: |
           python -m pip install --upgrade pip
-          pip install scikit-build-core cmake ninja delvewheel
+          pip install vtk pybind11 scikit-build-core cmake ninja delvewheel
 
-      - name: Cache CPM and dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/CPM
-            build/_deps
-          key: ${{ runner.os }}-cpm-${{ hashFiles('cmake/cpm.cmake') }}
-
-      - name: Build and install ViennaLS first
+      - name: Locate VTK CMake directory
         run: |
-          git clone https://github.com/ViennaTools/viennals.git
-          cd viennals
-          pip install . --no-build-isolation
-        env:
-          CMAKE_GENERATOR: "Visual Studio 17 2022"
+          $vtk_dir = python -c "import vtk, os; p=os.path.join(os.path.dirname(vtk.__file__), 'lib', 'cmake'); dirs=[d for d in os.listdir(p) if d.startswith('vtk-')]; print(os.path.join(p, dirs[0]))"
+          echo "VTK_DIR=$vtk_dir" >> $env:GITHUB_ENV
 
-      - name: Build ViennaPS wheel
+      - name: Build wheel
         run: pip wheel . --wheel-dir=dist --no-build-isolation
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
+          VTK_DIR: ${{ env.VTK_DIR }}
 
       - name: Repair wheel (bundle all DLLs)
         run: delvewheel repair dist\*.whl -w dist_fixed
