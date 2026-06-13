@@ -5,10 +5,6 @@ on: workflow_dispatch
 jobs:
   build:
     runs-on: windows-2022
-    env:
-      VCPKG_ROOT: ${{ runner.temp }}/vcpkg
-      VCPKG_DEFAULT_TRIPLET: x64-windows
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,29 +22,29 @@ jobs:
       - name: Cache vcpkg installed packages
         uses: actions/cache@v4
         with:
-          path: ${{ env.VCPKG_ROOT }}/installed
+          path: ${{ runner.temp }}/vcpkg/installed
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
 
-      - name: Install VTK and Embree via vcpkg (in temp directory)
+      - name: Install VTK and Embree via vcpkg
         run: |
-          git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
-          cd ${{ env.VCPKG_ROOT }}
+          $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
+          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+          cd $VCPKG_ROOT
           .\bootstrap-vcpkg.bat
           .\vcpkg install vtk embree --triplet x64-windows
 
-      - name: Set VIENNAPS_LOOKUP_DIRS
-        run: |
-          echo "VIENNAPS_LOOKUP_DIRS=${{ env.VCPKG_ROOT }}/installed/x64-windows" >> $env:GITHUB_ENV
-
       - name: Build wheel
-        run: pip wheel . --wheel-dir=dist --no-build-isolation
+        run: |
+          $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
+          $env:VIENNAPS_LOOKUP_DIRS="$VCPKG_ROOT\installed\x64-windows"
+          pip wheel . --wheel-dir=dist --no-build-isolation
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
 
       - name: Repair wheel (bundle DLLs)
         run: |
-          $vcpkg_bin = "${{ env.VCPKG_ROOT }}/installed/x64-windows/bin"
-          delvewheel repair --add-path=$vcpkg_bin dist\*.whl -w dist_fixed
+          $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
+          delvewheel repair --add-path="$VCPKG_ROOT\installed\x64-windows\bin" dist\*.whl -w dist_fixed
 
       - uses: actions/upload-artifact@v4
         with:
