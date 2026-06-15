@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (No Multiline)
+name: Build ViennaPS Complete Wheel (Reliable)
 
 on:
   workflow_dispatch:
@@ -27,8 +27,8 @@ jobs:
           $VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           & "$VCPKG_ROOT\bootstrap-vcpkg.bat"
-          "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
-          "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
       - name: Install VTK and Embree via vcpkg
         run: |
@@ -41,7 +41,7 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:VCPKG_ROOT\installed\x64-windows" -DCMAKE_GENERATOR="Visual Studio 17 2022" -DVIENNAPS_BUILD_PYTHON_BINDINGS=ON -DBUILD_SHARED_LIBS=ON
           cmake --build . --config Release --target _core
 
-      - name: Pack wheel manually
+      - name: Manually pack wheel
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist\viennaps
@@ -53,7 +53,7 @@ jobs:
           [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\RECORD", @())
           python -c "import zipfile, os; z=zipfile.ZipFile('viennaps-4.5.0-cp310-cp310-win_amd64.whl','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
 
-      - name: Repair wheel with delvewheel
+      - name: Repair wheel and bundle DLLs
         run: |
           $dll_dir = "$env:VCPKG_ROOT\installed\x64-windows\bin"
           delvewheel repair --add-path="$dll_dir" --wheel-dir=dist_fixed *.whl
