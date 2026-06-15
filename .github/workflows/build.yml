@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Final)
+name: Build ViennaPS Complete Wheel (Final Fix)
 
 on:
   workflow_dispatch:
@@ -36,9 +36,9 @@ jobs:
           set CMAKE_GENERATOR=Visual Studio 17 2022
           pip wheel . --no-build-isolation --wheel-dir=dist
 
-      - name: Repair wheel with delvewheel (ensure all DLLs are bundled)
+      - name: Repair wheel (bundle missing DLLs, no --with-imports)
         run: |
-          delvewheel repair --add-path=%CD%\vcpkg\installed\x64-windows\bin --with-imports --wheel-dir=dist_fixed dist\*.whl
+          delvewheel repair --add-path=%CD%\vcpkg\installed\x64-windows\bin --wheel-dir=dist_fixed dist\*.whl
 
       - uses: actions/upload-artifact@v4
         with:
