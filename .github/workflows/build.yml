@@ -49,13 +49,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $wheelDir
           Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" "$wheelDir\"
           Copy-Item "python\__init__.py" "$wheelDir\"
-          # 创建基本元数据
           $distInfo = "dist\viennaps-4.5.0.dist-info"
           New-Item -ItemType Directory -Force -Path $distInfo
           Set-Content -Path "$distInfo\METADATA" -Value "Metadata-Version: 2.1`nName: viennaps`nVersion: 4.5.0`nRequires-Dist: viennals>=5.7.2`n"
           Set-Content -Path "$distInfo\WHEEL" -Value "Wheel-Version: 1.0`nGenerator: manual`nRoot-Is-Purelib: false`nTag: cp310-cp310-win_amd64`n"
           Set-Content -Path "$distInfo\RECORD" -Value ""
-          # 打包为 .whl
           python -c "import zipfile, os; whl='viennaps-4.5.0-cp310-cp310-win_amd64.whl'; z=zipfile.ZipFile(whl,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
 
       - name: Repair wheel with delvewheel
