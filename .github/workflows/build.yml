@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Reliable)
+name: Build ViennaPS Complete Wheel (Final)
 
 on:
   workflow_dispatch:
@@ -15,50 +15,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          architecture: "x64"
 
-      - name: Install Python tools
+      - name: Install Python tools and vcpkg deps
+        shell: cmd
         run: |
           python -m pip install --upgrade pip
-          pip install delvewheel
+          pip install scikit-build-core cmake ninja delvewheel
+          git clone https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+          .\vcpkg install vtk embree --triplet x64-windows
+          cd ..
 
-      - name: Setup vcpkg
-        shell: pwsh
+      - name: Build wheel with PATH containing vcpkg binaries
+        shell: cmd
         run: |
-          $VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
-          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
-          & "$VCPKG_ROOT\bootstrap-vcpkg.bat"
-          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
-          echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
+          set PATH=%CD%\vcpkg\installed\x64-windows\bin;%PATH%
+          set CMAKE_PREFIX_PATH=%CD%\vcpkg\installed\x64-windows
+          set CMAKE_GENERATOR=Visual Studio 17 2022
+          pip wheel . --no-build-isolation --wheel-dir=dist
 
-      - name: Install VTK and Embree via vcpkg
+      - name: Repair wheel with delvewheel (ensure all DLLs are bundled)
         run: |
-          & "$env:VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --classic
-
-      - name: Build _core.pyd
-        run: |
-          mkdir build
-          cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:VCPKG_ROOT\installed\x64-windows" -DCMAKE_GENERATOR="Visual Studio 17 2022" -DVIENNAPS_BUILD_PYTHON_BINDINGS=ON -DBUILD_SHARED_LIBS=ON
-          cmake --build . --config Release --target _core
-
-      - name: Manually pack wheel
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist\viennaps
-          Copy-Item build\viennaps\Release\_core.cp310-win_amd64.pyd dist\viennaps\
-          Copy-Item python\__init__.py dist\viennaps\
-          New-Item -ItemType Directory -Force -Path dist\viennaps-4.5.0.dist-info
-          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\METADATA", @("Metadata-Version: 2.1","Name: viennaps","Version: 4.5.0","Requires-Dist: viennals>=5.7.2"))
-          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\WHEEL", @("Wheel-Version: 1.0","Generator: manual","Root-Is-Purelib: false","Tag: cp310-cp310-win_amd64"))
-          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\RECORD", @())
-          python -c "import zipfile, os; z=zipfile.ZipFile('viennaps-4.5.0-cp310-cp310-win_amd64.whl','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
-
-      - name: Repair wheel and bundle DLLs
-        run: |
-          $dll_dir = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          delvewheel repair --add-path="$dll_dir" --wheel-dir=dist_fixed *.whl
+          delvewheel repair --add-path=%CD%\vcpkg\installed\x64-windows\bin --with-imports --wheel-dir=dist_fixed dist\*.whl
 
       - uses: actions/upload-artifact@v4
         with:
-          name: viennaps-windows-complete
+          name: viennaps-wheel-final
           path: dist_fixed\*.whl
