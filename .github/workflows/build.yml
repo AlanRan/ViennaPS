@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Manual Pack Backup)
+name: Build ViennaPS Complete Wheel (Manual Pack Final)
 
 on:
   workflow_dispatch:
@@ -17,10 +17,10 @@ jobs:
           python-version: "3.10"
           architecture: "x64"
 
-      - name: Install Python tools
+      - name: Install Python tools and pybind11
         run: |
           python -m pip install --upgrade pip
-          pip install delvewheel
+          pip install delvewheel pybind11
 
       - name: Setup vcpkg
         shell: pwsh
@@ -35,11 +35,11 @@ jobs:
         run: |
           & "$env:VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --classic
 
-      - name: Configure and build _core.pyd only
+      - name: Configure and build Python bindings only
         run: |
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:VCPKG_ROOT\installed\x64-windows" -DCMAKE_GENERATOR="Visual Studio 17 2022" -DVIENNAPS_BUILD_PYTHON_BINDINGS=ON -DBUILD_SHARED_LIBS=ON
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:VCPKG_ROOT\installed\x64-windows" -DCMAKE_GENERATOR="Visual Studio 17 2022" -DVIENNAPS_BUILD_PYTHON=ON
           cmake --build . --config Release --target _core
 
       - name: Manually pack wheel
@@ -65,5 +65,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: viennaps-windows-complete-manual
+          name: viennaps-windows-complete
           path: dist_fixed\*.whl
