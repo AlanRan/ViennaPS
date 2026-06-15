@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Final Correct)
+name: Build ViennaPS Complete Wheel (No Multiline)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          architecture: "x64"
 
       - name: Install Python tools
         run: |
@@ -28,14 +27,14 @@ jobs:
           $VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           & "$VCPKG_ROOT\bootstrap-vcpkg.bat"
-          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
-          echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
+          "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
       - name: Install VTK and Embree via vcpkg
         run: |
           & "$env:VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --classic
 
-      - name: Build _core.pyd only
+      - name: Build _core.pyd
         run: |
           mkdir build
           cd build
@@ -45,36 +44,19 @@ jobs:
       - name: Pack wheel manually
         shell: pwsh
         run: |
-          $wheelDir = "dist"
-          New-Item -ItemType Directory -Force -Path "$wheelDir\viennaps"
-          Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" "$wheelDir\viennaps\"
-          Copy-Item "python\__init__.py" "$wheelDir\viennaps\"
+          New-Item -ItemType Directory -Force -Path dist\viennaps
+          Copy-Item build\viennaps\Release\_core.cp310-win_amd64.pyd dist\viennaps\
+          Copy-Item python\__init__.py dist\viennaps\
+          New-Item -ItemType Directory -Force -Path dist\viennaps-4.5.0.dist-info
+          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\METADATA", @("Metadata-Version: 2.1","Name: viennaps","Version: 4.5.0","Requires-Dist: viennals>=5.7.2"))
+          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\WHEEL", @("Wheel-Version: 1.0","Generator: manual","Root-Is-Purelib: false","Tag: cp310-cp310-win_amd64"))
+          [IO.File]::WriteAllLines("$pwd\dist\viennaps-4.5.0.dist-info\RECORD", @())
+          python -c "import zipfile, os; z=zipfile.ZipFile('viennaps-4.5.0-cp310-cp310-win_amd64.whl','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
 
-          $distInfo = "$wheelDir\viennaps-4.5.0.dist-info"
-          New-Item -ItemType Directory -Force -Path $distInfo
-
-          @"
-Metadata-Version: 2.1
-Name: viennaps
-Version: 4.5.0
-Requires-Dist: viennals>=5.7.2
-"@ | Set-Content -Path "$distInfo\METADATA"
-
-          @"
-Wheel-Version: 1.0
-Generator: manual
-Root-Is-Purelib: false
-Tag: cp310-cp310-win_amd64
-"@ | Set-Content -Path "$distInfo\WHEEL"
-
-          Set-Content -Path "$distInfo\RECORD" -Value ""
-
-          python -c "import zipfile, os; whl_name='viennaps-4.5.0-cp310-cp310-win_amd64.whl'; z=zipfile.ZipFile(whl_name,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
-
-      - name: Bundle all DLLs with delvewheel
+      - name: Repair wheel with delvewheel
         run: |
           $dll_dir = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          delvewheel repair --add-path="$dll_dir" --with-imports --wheel-dir=dist_fixed *.whl
+          delvewheel repair --add-path="$dll_dir" --wheel-dir=dist_fixed *.whl
 
       - uses: actions/upload-artifact@v4
         with:
