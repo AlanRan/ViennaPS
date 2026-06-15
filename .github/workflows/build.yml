@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Final)
+name: Build ViennaPS Complete Wheel (Manual Pack)
 
 on:
   workflow_dispatch:
@@ -17,10 +17,10 @@ jobs:
           python-version: "3.10"
           architecture: "x64"
 
-      - name: Install Python build tools
+      - name: Install Python tools
         run: |
           python -m pip install --upgrade pip
-          pip install scikit-build-core cmake ninja delvewheel
+          pip install delvewheel
 
       - name: Setup vcpkg
         shell: pwsh
@@ -35,22 +35,49 @@ jobs:
         run: |
           & "$env:VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --classic
 
-      - name: Build wheel (skip runtime dependency resolution)
+      - name: Configure and build _core.pyd only
         run: |
-          $env:CMAKE_PREFIX_PATH = "$env:VCPKG_ROOT\installed\x64-windows"
-          $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
-          $env:CMAKE_ARGS = "-DCMAKE_SKIP_INSTALL_RUNTIME_DEPENDENCIES=ON"
-          pip wheel . --no-build-isolation --wheel-dir=dist --verbose
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:VCPKG_ROOT\installed\x64-windows" -DCMAKE_GENERATOR="Visual Studio 17 2022" -DVIENNAPS_BUILD_PYTHON_BINDINGS=ON -DBUILD_SHARED_LIBS=ON
+          cmake --build . --config Release --target _core
 
-      - name: List wheel contents (debug)
+      - name: Manually pack wheel structure
+        shell: pwsh
         run: |
-          python -c "import glob, zipfile; whls=glob.glob('dist/*.whl'); [print(f'\n{w}:', *zipfile.ZipFile(w).namelist()[:20], sep='\n') for w in whls]"
+          # 创建 wheel 目录结构
+          $wheelDir = "dist"
+          New-Item -ItemType Directory -Force -Path "$wheelDir\viennaps"
+          # 拷贝编译好的扩展和 Python 文件
+          Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" "$wheelDir\viennaps\"
+          Copy-Item "python\__init__.py" "$wheelDir\viennaps\"
+          # 创建 dist-info 元数据
+          $distInfo = "$wheelDir\viennaps-4.5.0.dist-info"
+          New-Item -ItemType Directory -Force -Path $distInfo
+          Set-Content -Path "$distInfo\METADATA" -Value @"
+Metadata-Version: 2.1
+Name: viennaps
+Version: 4.5.0
+Requires-Dist: viennals>=5.7.2
+"@
+          Set-Content -Path "$distInfo\WHEEL" -Value @"
+Wheel-Version: 1.0
+Generator: manual
+Root-Is-Purelib: false
+Tag: cp310-cp310-win_amd64
+"@
+          Set-Content -Path "$distInfo\RECORD" -Value ""
+          # 使用 Python 打包为 .whl
+          python -c "import zipfile, os; whl_name='viennaps-4.5.0-cp310-cp310-win_amd64.whl'; z=zipfile.ZipFile(whl_name,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
 
-      - name: Repair wheels (bundle all DLLs, including indirect dependencies)
+      - name: List generated wheel contents (debug)
+        run: |
+          python -c "import glob, zipfile; whls=glob.glob('*.whl'); [print(f'\n{w}:', *zipfile.ZipFile(w).namelist()[:20], sep='\n') for w in whls]"
+
+      - name: Repair wheel with delvewheel (bundle all DLLs)
         run: |
           $dll_dir = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          # --with-imports 递归包含间接依赖，--no-mangle-all 禁止名称混淆
-          delvewheel repair --add-path="$dll_dir" --with-imports --no-mangle-all --wheel-dir=dist_fixed dist\*.whl
+          delvewheel repair --add-path="$dll_dir" --with-imports --no-mangle-all --wheel-dir=dist_fixed *.whl
 
       - uses: actions/upload-artifact@v4
         with:
