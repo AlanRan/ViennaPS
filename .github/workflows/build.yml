@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Manual Pack)
+name: Build ViennaPS Complete Wheel (Manual Pack Fixed)
 
 on:
   workflow_dispatch:
@@ -45,29 +45,34 @@ jobs:
       - name: Manually pack wheel structure
         shell: pwsh
         run: |
-          # 创建 wheel 目录结构
           $wheelDir = "dist"
           New-Item -ItemType Directory -Force -Path "$wheelDir\viennaps"
-          # 拷贝编译好的扩展和 Python 文件
           Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" "$wheelDir\viennaps\"
           Copy-Item "python\__init__.py" "$wheelDir\viennaps\"
-          # 创建 dist-info 元数据
+
           $distInfo = "$wheelDir\viennaps-4.5.0.dist-info"
           New-Item -ItemType Directory -Force -Path $distInfo
-          Set-Content -Path "$distInfo\METADATA" -Value @"
+
+          # 写入 METADATA
+          @"
 Metadata-Version: 2.1
 Name: viennaps
 Version: 4.5.0
 Requires-Dist: viennals>=5.7.2
-"@
-          Set-Content -Path "$distInfo\WHEEL" -Value @"
+"@ | Set-Content -Path "$distInfo\METADATA"
+
+          # 写入 WHEEL
+          @"
 Wheel-Version: 1.0
 Generator: manual
 Root-Is-Purelib: false
 Tag: cp310-cp310-win_amd64
-"@
+"@ | Set-Content -Path "$distInfo\WHEEL"
+
+          # 写入 RECORD（空文件）
           Set-Content -Path "$distInfo\RECORD" -Value ""
-          # 使用 Python 打包为 .whl
+
+          # 打包为 .whl
           python -c "import zipfile, os; whl_name='viennaps-4.5.0-cp310-cp310-win_amd64.whl'; z=zipfile.ZipFile(whl_name,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),'dist')) for r,_,fs in os.walk('dist') for f in fs]; z.close()"
 
       - name: List generated wheel contents (debug)
