@@ -1,4 +1,4 @@
-name: Build ViennaPS Wheel (Manual Assembly - Final)
+name: Build ViennaPS Wheel (Manual Assembly - Final Fixed)
 
 on:
   workflow_dispatch:
@@ -45,28 +45,49 @@ jobs:
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      - name: Build _core.pyd (without install)
+      - name: Build entire project (including Python module)
         shell: cmd
         run: |
           set PATH=%CD%\vcpkg\installed\x64-windows\bin;%PATH%
           set CMAKE_PREFIX_PATH=%CD%\vcpkg\installed\x64-windows
           set CMAKE_GENERATOR=Visual Studio 17 2022
           cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --target _core
+          cmake --build build --config Release   # 构建所有目标，不指定具体目标
+
+      - name: Locate generated _core.pyd and __init__.py
+        shell: pwsh
+        run: |
+          # 查找 _core.pyd
+          $pyd = Get-ChildItem -Path build -Recurse -Filter "_core*.pyd" | Select-Object -First 1
+          if ($pyd) {
+            Write-Host "Found _core.pyd at: $($pyd.FullName)"
+            $env:CORE_PYD = $pyd.FullName
+          } else {
+            Write-Host "ERROR: _core.pyd not found!" -ForegroundColor Red
+            exit 1
+          }
+          # 查找 __init__.py
+          $init = Get-ChildItem -Path . -Recurse -Filter "__init__.py" | Where-Object { $_.Directory.Name -eq "viennaps" } | Select-Object -First 1
+          if ($init) {
+            Write-Host "Found __init__.py at: $($init.FullName)"
+            $env:INIT_PY = $init.FullName
+          } else {
+            Write-Host "ERROR: __init__.py not found!" -ForegroundColor Red
+            exit 1
+          }
 
       - name: Create staging directory and copy core files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path wheel_staging\viennaps | Out-Null
           New-Item -ItemType Directory -Force -Path wheel_staging\viennaps-4.5.0.dist-info | Out-Null
-          Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" -Destination "wheel_staging\viennaps\"
-          Copy-Item "python\__init__.py" -Destination "wheel_staging\viennaps\"
+          Copy-Item $env:CORE_PYD -Destination "wheel_staging\viennaps\"
+          Copy-Item $env:INIT_PY -Destination "wheel_staging\viennaps\"
 
       - name: Copy all required DLLs from vcpkg
         shell: pwsh
         run: |
           $DLL_SRC = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          # 列出所有 DLL 以便调试（可选）
           Get-ChildItem $DLL_SRC -Filter *.dll | ForEach-Object { Write-Host "Found: $($_.Name)" }
           $DLLS = @(
             "embree4.dll",
@@ -97,9 +118,6 @@ jobs:
               Write-Host "Warning: $dll not found" -ForegroundColor Yellow
             }
           }
-          # 复制可能遗漏的其他依赖（如 TBB, zlib 等），建议根据实际需要添加
-          # 可选：复制所有 DLL（如果空间允许）
-          # Copy-Item "$DLL_SRC\*.dll" -Destination "wheel_staging\viennaps\" -Force
 
       - name: Generate METADATA, WHEEL and RECORD
         shell: pwsh
@@ -134,7 +152,6 @@ jobs:
             $hash = [Convert]::ToBase64String($sha)
             $recordLines += "$rel,sha256=$hash,$($bytes.Length)"
           }
-          # Add RECORD entry itself (placeholder)
           $recordRel = (Get-Item "$distInfo\RECORD").FullName.Substring($base.Length + 1) -replace '\\', '/'
           $recordLines += "$recordRel,,"
           $recordLines -join "`r`n" | Set-Content -Path "$distInfo\RECORD"
