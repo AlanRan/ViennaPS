@@ -1,4 +1,4 @@
-name: Build ViennaPS Wheel (Manual Assembly)
+name: Build ViennaPS Wheel (Manual Assembly - Final)
 
 on:
   workflow_dispatch:
@@ -24,13 +24,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install cmake ninja
 
+      - name: Create custom vcpkg triplet (disable DLL hashing)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path overlay_triplets | Out-Null
+          @"
+          set(VCPKG_TARGET_ARCHITECTURE x64)
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE dynamic)
+          set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
+          "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
+
       - name: Setup vcpkg and install dependencies
         shell: pwsh
         run: |
           $VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           & "$VCPKG_ROOT\bootstrap-vcpkg.bat"
-          & "$VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows
+          & "$VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --overlay-triplets=overlay_triplets --classic
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
@@ -51,25 +62,49 @@ jobs:
           Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" -Destination "wheel_staging\viennaps\"
           Copy-Item "python\__init__.py" -Destination "wheel_staging\viennaps\"
 
-      - name: Copy required DLLs
+      - name: Copy all required DLLs from vcpkg
         shell: pwsh
         run: |
           $DLL_SRC = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          $DLLS = @("embree4.dll","vtkCommonCore-9.3.dll","vtkCommonDataModel-9.3.dll","vtkCommonExecutionModel-9.3.dll","vtkCommonTransforms-9.3.dll","vtkFiltersCore-9.3.dll","vtkFiltersGeneral-9.3.dll","vtkFiltersGeometry-9.3.dll","vtkIOImage-9.3.dll","vtkIOXML-9.3.dll","vtkInteractionStyle-9.3.dll","vtkRenderingAnnotation-9.3.dll","vtkRenderingCore-9.3.dll","vtkRenderingFreeType-9.3.dll","vtkRenderingOpenGL2-9.3.dll","vtkRenderingUI-9.3.dll","vtksys-9.3.dll","libomp140.x86_64.dll")
+          # 列出所有 DLL 以便调试（可选）
+          Get-ChildItem $DLL_SRC -Filter *.dll | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          $DLLS = @(
+            "embree4.dll",
+            "vtkCommonCore-9.3.dll",
+            "vtkCommonDataModel-9.3.dll",
+            "vtkCommonExecutionModel-9.3.dll",
+            "vtkCommonTransforms-9.3.dll",
+            "vtkFiltersCore-9.3.dll",
+            "vtkFiltersGeneral-9.3.dll",
+            "vtkFiltersGeometry-9.3.dll",
+            "vtkIOImage-9.3.dll",
+            "vtkIOXML-9.3.dll",
+            "vtkInteractionStyle-9.3.dll",
+            "vtkRenderingAnnotation-9.3.dll",
+            "vtkRenderingCore-9.3.dll",
+            "vtkRenderingFreeType-9.3.dll",
+            "vtkRenderingOpenGL2-9.3.dll",
+            "vtkRenderingUI-9.3.dll",
+            "vtksys-9.3.dll",
+            "libomp140.x86_64.dll"
+          )
           foreach ($dll in $DLLS) {
             $src = Join-Path $DLL_SRC $dll
             if (Test-Path $src) {
               Copy-Item $src -Destination "wheel_staging\viennaps\" -Force
+              Write-Host "Copied: $dll"
             } else {
               Write-Host "Warning: $dll not found" -ForegroundColor Yellow
             }
           }
+          # 复制可能遗漏的其他依赖（如 TBB, zlib 等），建议根据实际需要添加
+          # 可选：复制所有 DLL（如果空间允许）
+          # Copy-Item "$DLL_SRC\*.dll" -Destination "wheel_staging\viennaps\" -Force
 
       - name: Generate METADATA, WHEEL and RECORD
         shell: pwsh
         run: |
           $distInfo = "wheel_staging\viennaps-4.5.0.dist-info"
-          # ---- METADATA ----
           $meta = @(
             "Name: ViennaPS",
             "Version: 4.5.0",
@@ -81,7 +116,6 @@ jobs:
           ) -join "`r`n"
           Set-Content -Path "$distInfo\METADATA" -Value $meta -Encoding UTF8
 
-          # ---- WHEEL ----
           $wheel = @(
             "Wheel-Version: 1.0",
             "Generator: manual",
@@ -90,7 +124,6 @@ jobs:
           ) -join "`r`n"
           Set-Content -Path "$distInfo\WHEEL" -Value $wheel
 
-          # ---- RECORD ----
           $recordLines = @()
           $base = (Get-Item "wheel_staging").FullName
           Get-ChildItem -Path "wheel_staging" -Recurse -File | ForEach-Object {
@@ -106,15 +139,15 @@ jobs:
           $recordLines += "$recordRel,,"
           $recordLines -join "`r`n" | Set-Content -Path "$distInfo\RECORD"
 
-      - name: Package wheel (ZIP)
+      - name: Package as .whl (ZIP)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Compress-Archive -Path "wheel_staging\*" -DestinationPath "dist\ViennaPS-4.5.0-cp310-cp310-win_amd64.whl" -Force
-          Write-Host "Wheel created: dist\ViennaPS-4.5.0-cp310-cp310-win_amd64.whl" -ForegroundColor Green
+          Write-Host "Wheel created successfully." -ForegroundColor Green
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: viennaps-wheel
+          name: viennaps-wheel-manual
           path: dist\*.whl
