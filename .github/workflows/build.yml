@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Final Working)
+name: Build ViennaPS Complete Wheel (Final)
 
 on:
   workflow_dispatch:
@@ -15,9 +15,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          architecture: "x64"
 
-      - name: Install Python tools
+      - name: Install Python build tools
         run: |
           python -m pip install --upgrade pip
           pip install scikit-build-core cmake ninja delvewheel
@@ -25,24 +24,28 @@ jobs:
       - name: Create custom vcpkg triplet (disable DLL hashing)
         shell: pwsh
         run: |
-          mkdir overlay_triplets
+          New-Item -ItemType Directory -Force -Path overlay_triplets
           @"
           set(VCPKG_TARGET_ARCHITECTURE x64)
           set(VCPKG_CRT_LINKAGE dynamic)
           set(VCPKG_LIBRARY_LINKAGE dynamic)
           set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
-          "@ | Set-Content overlay_triplets\x64-windows.cmake
+          "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
 
-      - name: Setup vcpkg and install dependencies (classic mode + custom triplet)
-        shell: cmd
+      - name: Setup vcpkg
+        shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git
-          cd vcpkg
-          .\bootstrap-vcpkg.bat
-          .\vcpkg install vtk embree --triplet x64-windows --overlay-triplets=..\overlay_triplets --classic
-          cd ..
+          $VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
+          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+          & "$VCPKG_ROOT\bootstrap-vcpkg.bat"
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      - name: Build wheel with correct PATH
+      - name: Install VTK and Embree (classic mode, no hash DLLs)
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg" install vtk embree --triplet x64-windows --overlay-triplets=overlay_triplets --classic
+
+      - name: Build wheel
         shell: cmd
         run: |
           set PATH=%CD%\vcpkg\installed\x64-windows\bin;%PATH%
@@ -50,7 +53,7 @@ jobs:
           set CMAKE_GENERATOR=Visual Studio 17 2022
           pip wheel . --no-build-isolation --wheel-dir=dist
 
-      - name: Repair wheel (bundle DLLs, now without hash)
+      - name: Repair wheel (DLLs now match expected names)
         run: |
           delvewheel repair --add-path=%CD%\vcpkg\installed\x64-windows\bin --wheel-dir=dist_fixed dist\*.whl
 
