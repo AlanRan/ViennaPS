@@ -22,7 +22,7 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install cmake ninja wheel delvewheel
+          pip install cmake ninja
 
       - name: Setup vcpkg and install dependencies
         shell: pwsh
@@ -34,7 +34,7 @@ jobs:
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      - name: Configure and build _core.pyd (without install)
+      - name: Build _core.pyd (without install)
         shell: cmd
         run: |
           set PATH=%CD%\vcpkg\installed\x64-windows\bin;%PATH%
@@ -43,129 +43,75 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --target _core
 
-      # 此时 _core.pyd 位于 build/viennaps/Release/_core.cp310-win_amd64.pyd
-
-      - name: Assemble wheel package manually
+      - name: Create staging directory and copy core files
         shell: pwsh
         run: |
-          # 创建 wheel 目录结构
-          $WHEEL_DIR = "wheel_staging"
-          $PKG_DIR = "$WHEEL_DIR\viennaps"
-          New-Item -ItemType Directory -Force -Path $PKG_DIR
+          New-Item -ItemType Directory -Force -Path wheel_staging\viennaps | Out-Null
+          New-Item -ItemType Directory -Force -Path wheel_staging\viennaps-4.5.0.dist-info | Out-Null
+          Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" -Destination "wheel_staging\viennaps\"
+          Copy-Item "python\__init__.py" -Destination "wheel_staging\viennaps\"
 
-          # 复制 _core.pyd
-          Copy-Item "build\viennaps\Release\_core.cp310-win_amd64.pyd" -Destination "$PKG_DIR\"
-
-          # 复制 __init__.py (从源码)
-          Copy-Item "python\__init__.py" -Destination "$PKG_DIR\"
-
-          # 复制所有需要的 DLL (从 vcpkg 的 bin 目录)
+      - name: Copy required DLLs
+        shell: pwsh
+        run: |
           $DLL_SRC = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          $DLLS = @(
-            "embree4.dll",
-            "vtkCommonCore-9.3.dll",
-            "vtkCommonDataModel-9.3.dll",
-            "vtkCommonExecutionModel-9.3.dll",
-            "vtkCommonTransforms-9.3.dll",
-            "vtkFiltersCore-9.3.dll",
-            "vtkFiltersGeneral-9.3.dll",
-            "vtkFiltersGeometry-9.3.dll",
-            "vtkIOImage-9.3.dll",
-            "vtkIOXML-9.3.dll",
-            "vtkInteractionStyle-9.3.dll",
-            "vtkRenderingAnnotation-9.3.dll",
-            "vtkRenderingCore-9.3.dll",
-            "vtkRenderingFreeType-9.3.dll",
-            "vtkRenderingOpenGL2-9.3.dll",
-            "vtkRenderingUI-9.3.dll",
-            "vtksys-9.3.dll",
-            # 可能还有 openmp 等，一并复制
-            "libomp140.x86_64.dll"
-          )
+          $DLLS = @("embree4.dll","vtkCommonCore-9.3.dll","vtkCommonDataModel-9.3.dll","vtkCommonExecutionModel-9.3.dll","vtkCommonTransforms-9.3.dll","vtkFiltersCore-9.3.dll","vtkFiltersGeneral-9.3.dll","vtkFiltersGeometry-9.3.dll","vtkIOImage-9.3.dll","vtkIOXML-9.3.dll","vtkInteractionStyle-9.3.dll","vtkRenderingAnnotation-9.3.dll","vtkRenderingCore-9.3.dll","vtkRenderingFreeType-9.3.dll","vtkRenderingOpenGL2-9.3.dll","vtkRenderingUI-9.3.dll","vtksys-9.3.dll","libomp140.x86_64.dll")
           foreach ($dll in $DLLS) {
             $src = Join-Path $DLL_SRC $dll
             if (Test-Path $src) {
-              Copy-Item $src -Destination "$PKG_DIR\" -Force
+              Copy-Item $src -Destination "wheel_staging\viennaps\" -Force
             } else {
               Write-Host "Warning: $dll not found" -ForegroundColor Yellow
             }
           }
 
-          # 创建 METADATA 和 RECORD 文件 (使用 wheel 库)
-          python -c "
-import wheel.metadata
-import json
-from wheel.wheelfile import WheelFile
-from wheel.util import native
-import os
-import time
+      - name: Generate METADATA, WHEEL and RECORD
+        shell: pwsh
+        run: |
+          $distInfo = "wheel_staging\viennaps-4.5.0.dist-info"
+          # ---- METADATA ----
+          $meta = @(
+            "Name: ViennaPS",
+            "Version: 4.5.0",
+            "Summary: Process Simulation Package",
+            "Author: ViennaPS Team",
+            "License: Apache-2.0",
+            "Requires-Python: >=3.8",
+            "Classifier: Programming Language :: Python :: 3"
+          ) -join "`r`n"
+          Set-Content -Path "$distInfo\METADATA" -Value $meta -Encoding UTF8
 
-# 准备 metadata
-metadata = {
-    'name': 'ViennaPS',
-    'version': '4.5.0',
-    'summary': 'Process Simulation Package',
-    'author': 'ViennaPS Team',
-    'author_email': '',
-    'license': 'Apache-2.0',
-    'home_page': 'https://github.com/ViennaTools/ViennaPS',
-    'requires_python': '>=3.8',
-    'classifiers': ['Programming Language :: Python :: 3'],
-}
-# 写入 METADATA 文件
-meta_dir = '$WHEEL_DIR\viennaps-4.5.0.dist-info'
-os.makedirs(meta_dir, exist_ok=True)
-with open(os.path.join(meta_dir, 'METADATA'), 'w', encoding='utf-8') as f:
-    for k, v in metadata.items():
-        f.write(f'{k}: {v}\n')
-# 写入 WHEEL
-with open(os.path.join(meta_dir, 'WHEEL'), 'w') as f:
-    f.write('Wheel-Version: 1.0\n')
-    f.write('Generator: manual\n')
-    f.write('Root-Is-Purelib: false\n')
-    f.write('Tag: cp310-cp310-win_amd64\n')
-# 写入 RECORD (稍后由 wheel 生成)
-"
+          # ---- WHEEL ----
+          $wheel = @(
+            "Wheel-Version: 1.0",
+            "Generator: manual",
+            "Root-Is-Purelib: false",
+            "Tag: cp310-cp310-win_amd64"
+          ) -join "`r`n"
+          Set-Content -Path "$distInfo\WHEEL" -Value $wheel
 
-          # 使用 wheel 库生成 RECORD 并打包
-          python -c "
-import os
-import wheel.wheelfile
-from wheel.util import native
-import sys
+          # ---- RECORD ----
+          $recordLines = @()
+          $base = (Get-Item "wheel_staging").FullName
+          Get-ChildItem -Path "wheel_staging" -Recurse -File | ForEach-Object {
+            $full = $_.FullName
+            $rel = $full.Substring($base.Length + 1) -replace '\\', '/'
+            $bytes = [System.IO.File]::ReadAllBytes($full)
+            $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+            $hash = [Convert]::ToBase64String($sha)
+            $recordLines += "$rel,sha256=$hash,$($bytes.Length)"
+          }
+          # Add RECORD entry itself (placeholder)
+          $recordRel = (Get-Item "$distInfo\RECORD").FullName.Substring($base.Length + 1) -replace '\\', '/'
+          $recordLines += "$recordRel,,"
+          $recordLines -join "`r`n" | Set-Content -Path "$distInfo\RECORD"
 
-wheel_dir = '$WHEEL_DIR'
-dist_info = os.path.join(wheel_dir, 'viennaps-4.5.0.dist-info')
-records = []
-# 收集所有文件
-for root, dirs, files in os.walk(wheel_dir):
-    for f in files:
-        full = os.path.join(root, f)
-        rel = os.path.relpath(full, wheel_dir).replace('\\', '/')
-        # 计算 sha256 和大小
-        import hashlib
-        with open(full, 'rb') as fp:
-            data = fp.read()
-            sha = hashlib.sha256(data).hexdigest()
-            size = len(data)
-        records.append(f'{rel},sha256={sha},{size}')
-# 写入 RECORD
-with open(os.path.join(dist_info, 'RECORD'), 'w') as f:
-    f.write('\n'.join(records))
-    f.write('\n')
-
-# 打包成 wheel
-wheel_file = 'ViennaPS-4.5.0-cp310-cp310-win_amd64.whl'
-with wheel.wheelfile.WheelFile(wheel_file, 'w') as wf:
-    for root, dirs, files in os.walk(wheel_dir):
-        for f in files:
-            full = os.path.join(root, f)
-            arcname = os.path.relpath(full, wheel_dir).replace('\\', '/')
-            wf.write(full, arcname)
-print(f'Wheel created: {wheel_file}')
-"
-
-          Move-Item ViennaPS-4.5.0-cp310-cp310-win_amd64.whl -Destination dist\
+      - name: Package wheel (ZIP)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "wheel_staging\*" -DestinationPath "dist\ViennaPS-4.5.0-cp310-cp310-win_amd64.whl" -Force
+          Write-Host "Wheel created: dist\ViennaPS-4.5.0-cp310-cp310-win_amd64.whl" -ForegroundColor Green
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
