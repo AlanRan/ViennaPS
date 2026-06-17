@@ -1,4 +1,4 @@
-name: Build ViennaPS Complete Wheel (Final - No target)
+name: Build ViennaPS Complete Wheel (Final Reliable)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       - name: Install Python build tools
         run: |
           python -m pip install --upgrade pip
-          pip install scikit-build-core cmake ninja
+          pip install scikit-build-core cmake ninja delvewheel
 
       - name: Create custom vcpkg triplet (disable DLL hashing)
         shell: pwsh
@@ -43,126 +43,81 @@ jobs:
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      - name: Build entire project (including Python module)
-        shell: cmd
+      - name: Patch python/CMakeLists.txt to skip runtime dependency resolution
+        shell: pwsh
         run: |
-          set PATH=%CD%\vcpkg\installed\x64-windows\bin;%PATH%
-          set CMAKE_PREFIX_PATH=%CD%\vcpkg\installed\x64-windows
-          set CMAKE_GENERATOR=Visual Studio 17 2022
+          $file = "python\CMakeLists.txt"
+          $content = Get-Content $file -Raw
+          # 注释掉 install(CODE ...) 中调用的 file(GET_RUNTIME_DEPENDENCIES ...) 部分
+          $pattern = '(install\s*\(\s*CODE\s*"\s*file\s*\(\s*GET_RUNTIME_DEPENDENCIES[\s\S]*?\)\s*"\s*\))'
+          $replacement = '# $1  # Skipped for manual wheel repair'
+          $newContent = $content -replace $pattern, $replacement
+          Set-Content $file $newContent -NoNewline
+          # 验证补丁是否成功
+          if (Select-String -Path $file -Pattern "Skipped for manual wheel repair") {
+            Write-Host "Patch applied successfully."
+          } else {
+            Write-Host "Patch might have failed!" -ForegroundColor Yellow
+          }
+
+      - name: Build project (including Python module)
+        shell: pwsh
+        run: |
+          $env:PATH = "${{ github.workspace }}\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $env:CMAKE_PREFIX_PATH = "${{ github.workspace }}\vcpkg\installed\x64-windows"
+          $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
-      - name: Locate generated _core.pyd and __init__.py
+      - name: Locate _core.pyd and __init__.py
         shell: pwsh
         run: |
-          # 查找 _core.pyd
+          # List all files for debugging
+          Get-ChildItem -Path build -Recurse -File | ForEach-Object { Write-Host $_.FullName }
+          # Try to find _core.pyd
           $pyd = Get-ChildItem -Path build -Recurse -Filter "_core*.pyd" | Select-Object -First 1
+          if (-not $pyd) {
+            # Fallback to known path
+            $pyd = Get-Item -Path "build\viennaps\Release\_core.cp310-win_amd64.pyd" -ErrorAction SilentlyContinue
+          }
           if ($pyd) {
             Write-Host "Found _core.pyd at: $($pyd.FullName)"
             $env:CORE_PYD = $pyd.FullName
           } else {
-            Write-Host "ERROR: _core.pyd not found!" -ForegroundColor Red
+            Write-Error "ERROR: _core.pyd not found!"
             exit 1
           }
-          # 查找 __init__.py
-          $init = Get-ChildItem -Path . -Recurse -Filter "__init__.py" | Where-Object { $_.Directory.Name -eq "viennaps" -and $_.Directory.Parent.Name -eq "python" } | Select-Object -First 1
+          # Find __init__.py (usually in python/viennaps/__init__.py)
+          $init = Get-ChildItem -Path python -Recurse -Filter "__init__.py" | Where-Object { $_.Directory.Name -eq "viennaps" } | Select-Object -First 1
           if ($init) {
             Write-Host "Found __init__.py at: $($init.FullName)"
             $env:INIT_PY = $init.FullName
           } else {
-            Write-Host "ERROR: __init__.py not found!" -ForegroundColor Red
+            Write-Error "ERROR: __init__.py not found!"
             exit 1
           }
 
-      - name: Create staging directory and copy core files
+      - name: Build wheel (without install step)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path wheel_staging\viennaps | Out-Null
-          New-Item -ItemType Directory -Force -Path wheel_staging\viennaps-4.5.0.dist-info | Out-Null
-          Copy-Item $env:CORE_PYD -Destination "wheel_staging\viennaps\"
-          Copy-Item $env:INIT_PY -Destination "wheel_staging\viennaps\"
+          $env:PATH = "${{ github.workspace }}\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $env:CMAKE_PREFIX_PATH = "${{ github.workspace }}\vcpkg\installed\x64-windows"
+          $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+          # 由于我们修补了 CMakeLists.txt，install 步骤的依赖解析已被跳过，所以 pip wheel 会成功
+          pip wheel . --no-build-isolation --wheel-dir=dist
 
-      - name: Copy all required DLLs from vcpkg
+      - name: Repair wheel with delvewheel
         shell: pwsh
         run: |
-          $DLL_SRC = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          Get-ChildItem $DLL_SRC -Filter *.dll | ForEach-Object { Write-Host "Found: $($_.Name)" }
-          $DLLS = @(
-            "embree4.dll",
-            "vtkCommonCore-9.3.dll",
-            "vtkCommonDataModel-9.3.dll",
-            "vtkCommonExecutionModel-9.3.dll",
-            "vtkCommonTransforms-9.3.dll",
-            "vtkFiltersCore-9.3.dll",
-            "vtkFiltersGeneral-9.3.dll",
-            "vtkFiltersGeometry-9.3.dll",
-            "vtkIOImage-9.3.dll",
-            "vtkIOXML-9.3.dll",
-            "vtkInteractionStyle-9.3.dll",
-            "vtkRenderingAnnotation-9.3.dll",
-            "vtkRenderingCore-9.3.dll",
-            "vtkRenderingFreeType-9.3.dll",
-            "vtkRenderingOpenGL2-9.3.dll",
-            "vtkRenderingUI-9.3.dll",
-            "vtksys-9.3.dll",
-            "libomp140.x86_64.dll"
-          )
-          foreach ($dll in $DLLS) {
-            $src = Join-Path $DLL_SRC $dll
-            if (Test-Path $src) {
-              Copy-Item $src -Destination "wheel_staging\viennaps\" -Force
-              Write-Host "Copied: $dll"
-            } else {
-              Write-Host "Warning: $dll not found" -ForegroundColor Yellow
-            }
+          $env:PATH = "${{ github.workspace }}\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $dll_dir = "${{ github.workspace }}\vcpkg\installed\x64-windows\bin"
+          # 修复所有 wheel 文件
+          Get-ChildItem -Path dist -Filter "*.whl" | ForEach-Object {
+            $wheel = $_.FullName
+            delvewheel repair --add-path $dll_dir --wheel-dir dist_fixed $wheel
           }
 
-      - name: Generate METADATA, WHEEL and RECORD
-        shell: pwsh
-        run: |
-          $distInfo = "wheel_staging\viennaps-4.5.0.dist-info"
-          $meta = @(
-            "Name: ViennaPS",
-            "Version: 4.5.0",
-            "Summary: Process Simulation Package",
-            "Author: ViennaPS Team",
-            "License: Apache-2.0",
-            "Requires-Python: >=3.8",
-            "Classifier: Programming Language :: Python :: 3"
-          ) -join "`r`n"
-          Set-Content -Path "$distInfo\METADATA" -Value $meta -Encoding UTF8
-
-          $wheel = @(
-            "Wheel-Version: 1.0",
-            "Generator: manual",
-            "Root-Is-Purelib: false",
-            "Tag: cp310-cp310-win_amd64"
-          ) -join "`r`n"
-          Set-Content -Path "$distInfo\WHEEL" -Value $wheel
-
-          $recordLines = @()
-          $base = (Get-Item "wheel_staging").FullName
-          Get-ChildItem -Path "wheel_staging" -Recurse -File | ForEach-Object {
-            $full = $_.FullName
-            $rel = $full.Substring($base.Length + 1) -replace '\\', '/'
-            $bytes = [System.IO.File]::ReadAllBytes($full)
-            $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
-            $hash = [Convert]::ToBase64String($sha)
-            $recordLines += "$rel,sha256=$hash,$($bytes.Length)"
-          }
-          $recordRel = (Get-Item "$distInfo\RECORD").FullName.Substring($base.Length + 1) -replace '\\', '/'
-          $recordLines += "$recordRel,,"
-          $recordLines -join "`r`n" | Set-Content -Path "$distInfo\RECORD"
-
-      - name: Package as .whl (ZIP)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "wheel_staging\*" -DestinationPath "dist\ViennaPS-4.5.0-cp310-cp310-win_amd64.whl" -Force
-          Write-Host "Wheel created successfully." -ForegroundColor Green
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: viennaps-wheel-manual
-          path: dist\*.whl
+          name: viennaps-wheel-final
+          path: dist_fixed\*.whl
