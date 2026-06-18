@@ -30,20 +30,16 @@ jobs:
           set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
           "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
 
-      - name: Cache vcpkg installed packages
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/vcpkg/installed
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Install VTK and Embree via vcpkg
+      - name: Install VTK, Embree, and LLVM (provides OpenMP runtime)
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
+          if (Test-Path $VCPKG_ROOT) {
+            Remove-Item -Recurse -Force $VCPKG_ROOT
+          }
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           cd $VCPKG_ROOT
           .\bootstrap-vcpkg.bat
-          # 使用自定义 triplet 并加 --classic 避免 manifest 模式
-          .\vcpkg install vtk embree --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets" --classic
+          .\vcpkg install vtk embree llvm --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets" --classic
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
@@ -52,12 +48,10 @@ jobs:
         run: |
           $file = "python\CMakeLists.txt"
           $content = Get-Content $file -Raw
-          # 查找并注释掉 install(CODE ... file(GET_RUNTIME_DEPENDENCIES ...)) 部分
           $pattern = '(install\s*\(\s*CODE\s*"\s*file\s*\(\s*GET_RUNTIME_DEPENDENCIES[\s\S]*?\)\s*"\s*\))'
           $replacement = '# $1  # Skipped to avoid missing DLL errors during wheel build'
           $newContent = $content -replace $pattern, $replacement
           Set-Content $file $newContent -NoNewline
-          # 验证补丁
           if (Select-String -Path $file -Pattern "Skipped to avoid missing DLL errors") {
             Write-Host "Patch applied successfully."
           } else {
@@ -73,10 +67,9 @@ jobs:
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
 
-      - name: Repair wheel (bundle DLLs)
+      - name: Repair wheel (bundle all DLLs)
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
-          # 确保路径中有 DLL
           $env:PATH="$VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
           delvewheel repair --add-path="$VCPKG_ROOT\installed\x64-windows\bin" dist\*.whl -w dist_fixed
 
