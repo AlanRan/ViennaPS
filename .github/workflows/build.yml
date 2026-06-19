@@ -1,6 +1,7 @@
-name: Build ViennaPS wheel (with OpenMP runtime)
+name: Build ViennaPS Wheel (Stable)
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -30,7 +31,7 @@ jobs:
           set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
           "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
 
-      - name: Install VTK and Embree via vcpkg (skip llvm)
+      - name: Install VTK and Embree via vcpkg
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
           if (Test-Path $VCPKG_ROOT) { Remove-Item -Recurse -Force $VCPKG_ROOT }
@@ -47,12 +48,11 @@ jobs:
           $dll_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe"
           $installer = "LLVM-18.1.8-win64.exe"
           Invoke-WebRequest -Uri $dll_url -OutFile $installer
-          # 静默安装到临时目录，仅提取 libomp140.x86_64.dll
           $install_dir = "${{ runner.temp }}\llvm_temp"
           Start-Process -FilePath $installer -ArgumentList "/S /D=$install_dir" -Wait
           Copy-Item "$install_dir\bin\libomp140.x86_64.dll" -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
-          # 清理安装文件
           Remove-Item -Recurse -Force $install_dir
+          Remove-Item $installer
 
       - name: Build wheel
         run: |
