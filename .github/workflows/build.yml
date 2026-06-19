@@ -1,6 +1,7 @@
-name: Build ViennaPS Wheel (Manifest Mode - Fully Fixed)
+name: Build ViennaPS Wheel (Stable - Fixed OpenMP)
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,7 +20,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install scikit-build-core cmake ninja delvewheel
 
-      # 1. 创建自定义 triplet 以禁用 DLL 哈希
       - name: Create custom vcpkg triplet (disable DLL hashing)
         shell: pwsh
         run: |
@@ -31,54 +31,36 @@ jobs:
           set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
           "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
 
-      # 2. 修改 vcpkg.json，添加 vtk 和 embree 依赖（manifest 模式）
-      - name: Patch vcpkg.json to add VTK and Embree dependencies
-        shell: pwsh
-        run: |
-          $file = "vcpkg.json"
-          $json = Get-Content $file -Raw | ConvertFrom-Json
-          # 如果 dependencies 不存在，创建空数组
-          if (-not $json.dependencies) {
-            $json | Add-Member -MemberType NoteProperty -Name "dependencies" -Value @()
-          }
-          # 添加 vtk 和 embree（如果尚未添加）
-          $deps = $json.dependencies
-          if ("vtk" -notin $deps) { $deps += "vtk" }
-          if ("embree" -notin $deps) { $deps += "embree" }
-          $json.dependencies = $deps
-          # 写回文件
-          $json | ConvertTo-Json -Depth 10 | Set-Content $file -Encoding UTF8
-          # 验证修改
-          Write-Host "Updated vcpkg.json:"
-          Get-Content $file
-
-      # 3. 安装 vcpkg 并使用 manifest 模式安装依赖（不指定包名）
-      - name: Setup vcpkg and install dependencies (manifest mode)
+      - name: Install VTK and Embree via vcpkg
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
           if (Test-Path $VCPKG_ROOT) { Remove-Item -Recurse -Force $VCPKG_ROOT }
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           cd $VCPKG_ROOT
           .\bootstrap-vcpkg.bat
-          # 使用 manifest 模式，不指定包名，仅指定 triplet 和 overlay-triplets
-          .\vcpkg install --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets"
+          .\vcpkg install vtk embree --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets" --classic
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      # 4. 下载并提取 OpenMP 运行时（vcpkg 的 llvm 可能不提供，我们手动提供）
-      - name: Download and extract OpenMP runtime library
+      - name: Download and extract OpenMP runtime library (ZIP method)
         shell: pwsh
         run: |
-          $dll_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe"
-          $installer = "LLVM-18.1.8-win64.exe"
-          Invoke-WebRequest -Uri $dll_url -OutFile $installer
-          $install_dir = "${{ runner.temp }}\llvm_temp"
-          Start-Process -FilePath $installer -ArgumentList "/S /D=$install_dir" -Wait
-          Copy-Item "$install_dir\bin\libomp140.x86_64.dll" -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
-          Remove-Item -Recurse -Force $install_dir
-          Remove-Item $installer
+          $zip_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.zip"
+          $zip_file = "LLVM-18.1.8-win64.zip"
+          Invoke-WebRequest -Uri $zip_url -OutFile $zip_file
+          $extract_dir = "${{ runner.temp }}\llvm"
+          Expand-Archive -Path $zip_file -DestinationPath $extract_dir
+          # 查找所有 libomp*.dll 文件（可能名称不同）
+          $dll = Get-ChildItem -Path $extract_dir -Recurse -Filter "libomp*.dll" | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll.FullName -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
+            Write-Host "OpenMP DLL copied: $($dll.Name)"
+          } else {
+            Write-Error "OpenMP DLL not found in extracted LLVM package."
+            exit 1
+          }
+          Remove-Item $zip_file
 
-      # 5. 构建 wheel（CMake 会自动找到 vcpkg 安装的依赖）
       - name: Build wheel
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
@@ -88,15 +70,13 @@ jobs:
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
 
-      # 6. 修复 wheel（打包所有 DLL，包括 OpenMP）
-      - name: Repair wheel (bundle all DLLs)
+      - name: Repair wheel (bundle all DLLs including OpenMP)
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
           $dll_dir="$VCPKG_ROOT\installed\x64-windows\bin"
           $env:PATH="$dll_dir;$env:PATH"
           delvewheel repair --add-path="$dll_dir" dist\*.whl -w dist_fixed
 
-      # 7. 上传最终产物
       - uses: actions/upload-artifact@v4
         with:
           name: viennaps-py310-fixed
