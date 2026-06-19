@@ -1,4 +1,4 @@
-name: Build ViennaPS Wheel (Stable - Fixed OpenMP)
+name: Build ViennaPS Wheel (Stable - OpenMP via vcpkg)
 
 on:
   workflow_dispatch:
@@ -31,35 +31,17 @@ jobs:
           set(VCPKG_POLICY_DLLS_WITHOUT_HASH enabled)
           "@ | Set-Content -Path overlay_triplets\x64-windows.cmake
 
-      - name: Install VTK and Embree via vcpkg
+      - name: Install VTK, Embree, and OpenMP via vcpkg
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
           if (Test-Path $VCPKG_ROOT) { Remove-Item -Recurse -Force $VCPKG_ROOT }
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
           cd $VCPKG_ROOT
           .\bootstrap-vcpkg.bat
-          .\vcpkg install vtk embree --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets" --classic
+          # 安装 vtk, embree, 以及 openmp（轻量级，仅获取运行时 DLL）
+          .\vcpkg install vtk embree openmp --triplet x64-windows --overlay-triplets="${{ github.workspace }}\overlay_triplets" --classic
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
-
-      - name: Download and extract OpenMP runtime library (ZIP method)
-        shell: pwsh
-        run: |
-          $zip_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.zip"
-          $zip_file = "LLVM-18.1.8-win64.zip"
-          Invoke-WebRequest -Uri $zip_url -OutFile $zip_file
-          $extract_dir = "${{ runner.temp }}\llvm"
-          Expand-Archive -Path $zip_file -DestinationPath $extract_dir
-          # 查找所有 libomp*.dll 文件（可能名称不同）
-          $dll = Get-ChildItem -Path $extract_dir -Recurse -Filter "libomp*.dll" | Select-Object -First 1
-          if ($dll) {
-            Copy-Item $dll.FullName -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
-            Write-Host "OpenMP DLL copied: $($dll.Name)"
-          } else {
-            Write-Error "OpenMP DLL not found in extracted LLVM package."
-            exit 1
-          }
-          Remove-Item $zip_file
 
       - name: Build wheel
         run: |
