@@ -1,4 +1,4 @@
-name: Build ViennaPS Wheel (Stable - OpenMP via LLVM Installer)
+name: Build ViennaPS Wheel (Patch install)
 
 on:
   workflow_dispatch:
@@ -50,17 +50,40 @@ jobs:
           Invoke-WebRequest -Uri $exe_url -OutFile $installer
           $install_dir = "${{ runner.temp }}\llvm"
           Start-Process -FilePath $installer -ArgumentList "/S /D=$install_dir" -Wait
-          # 递归搜索所有 libomp*.dll
           $dll = Get-ChildItem -Path $install_dir -Recurse -Filter "libomp*.dll" | Select-Object -First 1
           if ($dll) {
             Copy-Item $dll.FullName -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
             Write-Host "OpenMP DLL copied: $($dll.Name)"
           } else {
-            Write-Error "OpenMP DLL not found in installed LLVM directory."
+            Write-Error "OpenMP DLL not found"
             exit 1
           }
           Remove-Item $installer
           Remove-Item -Recurse -Force $install_dir
+
+      - name: Patch python/CMakeLists.txt to skip runtime dependency resolution
+        shell: pwsh
+        run: |
+          $file = "python\CMakeLists.txt"
+          $content = Get-Content $file -Raw
+          # 模式1：匹配 install(CODE ... file(GET_RUNTIME_DEPENDENCIES ...))
+          $pattern1 = '(install\s*\(\s*CODE\s*"\s*file\s*\(\s*GET_RUNTIME_DEPENDENCIES[\s\S]*?\)\s*"\s*\))'
+          if ($content -match $pattern1) {
+            $newContent = $content -replace $pattern1, '# $1  # Skipped to avoid missing DLL errors'
+            Set-Content $file $newContent -NoNewline
+            Write-Host "Patch applied successfully (pattern1)."
+          } else {
+            # 模式2：匹配 install(TARGETS ... RUNTIME_DEPENDENCIES ...)
+            $pattern2 = '(install\s*\(\s*TARGETS\s+\${PYTHON_MODULE_NAME}[\s\S]*?RUNTIME_DEPENDENCIES[\s\S]*?\))'
+            if ($content -match $pattern2) {
+              $newContent = $content -replace $pattern2, '# $1  # Skipped to avoid missing DLL errors'
+              Set-Content $file $newContent -NoNewline
+              Write-Host "Patch applied successfully (pattern2)."
+            } else {
+              Write-Error "Could not find any install command with RUNTIME_DEPENDENCIES. Please check python/CMakeLists.txt"
+              exit 1
+            }
+          }
 
       - name: Build wheel
         run: |
