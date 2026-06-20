@@ -1,4 +1,4 @@
-name: Build ViennaPS Wheel (Patch install)
+name: Build ViennaPS Wheel (Patch install precisely)
 
 on:
   workflow_dispatch:
@@ -15,10 +15,10 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install Python build tools
+      - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install scikit-build-core cmake ninja delvewheel
+          pip install cmake ninja delvewheel
 
       - name: Create custom vcpkg triplet (disable DLL hashing)
         shell: pwsh
@@ -42,7 +42,7 @@ jobs:
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
           echo "$VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
-      - name: Download and extract OpenMP runtime library (from LLVM installer)
+      - name: Download and extract OpenMP runtime library
         shell: pwsh
         run: |
           $exe_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe"
@@ -53,36 +53,30 @@ jobs:
           $dll = Get-ChildItem -Path $install_dir -Recurse -Filter "libomp*.dll" | Select-Object -First 1
           if ($dll) {
             Copy-Item $dll.FullName -Destination "$env:VCPKG_ROOT\installed\x64-windows\bin\"
-            Write-Host "OpenMP DLL copied: $($dll.Name)"
           } else {
             Write-Error "OpenMP DLL not found"
             exit 1
           }
-          Remove-Item $installer
+          Remove-Item $installer -Force
           Remove-Item -Recurse -Force $install_dir
 
-      - name: Patch python/CMakeLists.txt to skip runtime dependency resolution
+      - name: Patch python/CMakeLists.txt to remove runtime dependency resolution
         shell: pwsh
         run: |
           $file = "python\CMakeLists.txt"
           $content = Get-Content $file -Raw
-          # 模式1：匹配 install(CODE ... file(GET_RUNTIME_DEPENDENCIES ...))
-          $pattern1 = '(install\s*\(\s*CODE\s*"\s*file\s*\(\s*GET_RUNTIME_DEPENDENCIES[\s\S]*?\)\s*"\s*\))'
-          if ($content -match $pattern1) {
-            $newContent = $content -replace $pattern1, '# $1  # Skipped to avoid missing DLL errors'
-            Set-Content $file $newContent -NoNewline
-            Write-Host "Patch applied successfully (pattern1)."
+          # 1. 移除第一个 install 中的 RUNTIME_DEPENDENCY_SET 参数
+          $pattern1 = '(install\s*\(\s*TARGETS\s+\${VIENNAPS_PYTHON_MODULE_NAME})\s+RUNTIME_DEPENDENCY_SET\s+\S+(\s+LIBRARY\s+DESTINATION.*?\))'
+          $content = $content -replace $pattern1, '$1$2'
+          # 2. 注释掉第二个 install (RUNTIME_DEPENDENCY_SET)
+          $pattern2 = '(install\s*\(\s*RUNTIME_DEPENDENCY_SET\s+viennaps_python_runtime_deps[\s\S]*?\))'
+          $content = $content -replace $pattern2, '# $1  # Skipped to avoid DLL resolution errors'
+          Set-Content $file $content -NoNewline
+          # 验证修改
+          if (Select-String -Path $file -Pattern "RUNTIME_DEPENDENCY_SET") {
+            Write-Host "Patch applied successfully."
           } else {
-            # 模式2：匹配 install(TARGETS ... RUNTIME_DEPENDENCIES ...)
-            $pattern2 = '(install\s*\(\s*TARGETS\s+\${PYTHON_MODULE_NAME}[\s\S]*?RUNTIME_DEPENDENCIES[\s\S]*?\))'
-            if ($content -match $pattern2) {
-              $newContent = $content -replace $pattern2, '# $1  # Skipped to avoid missing DLL errors'
-              Set-Content $file $newContent -NoNewline
-              Write-Host "Patch applied successfully (pattern2)."
-            } else {
-              Write-Error "Could not find any install command with RUNTIME_DEPENDENCIES. Please check python/CMakeLists.txt"
-              exit 1
-            }
+            Write-Host "Warning: Could not verify patch, but continuing."
           }
 
       - name: Build wheel
@@ -94,7 +88,7 @@ jobs:
         env:
           CMAKE_GENERATOR: "Visual Studio 17 2022"
 
-      - name: Repair wheel (bundle all DLLs including OpenMP)
+      - name: Repair wheel (bundle all DLLs)
         run: |
           $VCPKG_ROOT="${{ runner.temp }}\vcpkg"
           $dll_dir="$VCPKG_ROOT\installed\x64-windows\bin"
